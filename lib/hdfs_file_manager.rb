@@ -1,8 +1,8 @@
 #
-# This class manages the stats read from log file
+# This class manages the stats read from the HDFS log file
 #
 class HDFSLogFileManager
-  def initialize(options, field_map, logger)
+    def initialize(options, field_map, logger)
         @options    = options
         @field_map  = field_map
         @logger     = logger
@@ -138,7 +138,7 @@ class HDFSLogFileManager
             # now that we have printed the collected info, clear the stats for next round
             # and update last byte position
             reset_stats
-                
+
             # update last byte position
             @logger.debug "Updating last byte position to #{@file_byte_position}"
             @last_byte_pos.put(@file_byte_position)
