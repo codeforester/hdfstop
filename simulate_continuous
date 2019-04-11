@@ -19,12 +19,12 @@ rm -f -- "${c_log}"*.pos
 # hdfstop to be kicked off
 #
 (
-  sleep 5
-	while pgrep -qf hdfstop; do
-	  tail -500 "$main_log" >> "$c_log"
-		sleep 5
-  done
-	printf "Exiting log appender\n" >&2
+    sleep 5
+    while pgrep -qf hdfstop; do
+        tail -500 "$main_log" >> "$c_log"
+        sleep 5
+    done
+    printf "Exiting log appender\n" >&2
 ) &
 
 #
