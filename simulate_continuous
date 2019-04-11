@@ -1,0 +1,34 @@
+#!/bin/bash
+
+main_log=hdfs-audit.log
+c_log=hdfs-audit.log.continous
+[[ -f "$main_log" ]] || { printf "Main log file %s does not exist" "$main_log" >&2; exit 1; }
+
+#
+# Initialize log file
+#
+tail -5000 "$main_log" > "$c_log"
+
+#
+# clear any last byte position file that exists
+#
+rm -f "${c_log}"*.pos
+
+#
+# initiate log appender in a sub shell - it keeps running as long as hdfstop is running; the initial sleep makes sure that we wait for
+# hdfstop to be kicked off
+#
+(
+  sleep 5
+	while pgrep -qf hdfstop; do
+	  tail -500 "$main_log" >> "$c_log"
+		sleep 5
+  done
+	printf "Exiting log appender\n" >&2
+) &
+
+#
+# Run hdfstop in continous mode, with a sleep of 3 minutes between file scans and 10 second interval for printing output.
+# The log appender is set to run more frequently and hence there should be a good amount of log in each printing interval.
+#
+hdfstop -a "$c_log" -c -s 3 -t 10

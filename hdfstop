@@ -1,0 +1,162 @@
+#!/usr/bin/env ruby
+
+#
+# hdfstop: parses HDFS logs and outputs summary statistics
+#
+# Usage:
+#
+#   hdfstop [-h|--suppress_header] [-d|--debug] [-c|--continuous] [-t|--time_interval number] [-s|--sleep_interval number] -a|--audit_log file [-g|--group_by list] [-q|--query list]
+#
+
+require 'optparse'
+require 'ostruct'
+require 'logger'
+require 'pathname'
+require_relative 'lib/last_byte_position.rb'
+require_relative 'lib/hdfs_file_manager.rb'
+
+#
+# process command line arguments
+#
+def handle_args
+    options = OpenStruct.new
+    #
+    # default options
+    #
+    def_group_by            = "ugi,cmd"
+    def_limit               = "10"
+    def_interval            = "10"
+    def_sleep               = "1"
+    options.group_by        = def_group_by
+    options.query           = ""
+    options.continuous      = false
+    options.debug           = false
+    options.suppress_header = false
+    options.limit           = def_limit
+    options.interval        = def_interval
+    options.sleep           = def_sleep
+
+    optparse = OptionParser.new do |opt|
+        opt.banner = "Usage: hdfstop [-h|--suppress_header] [-d|--debug] [-c|--continuous] [-t|--time_interval number] [-s|--sleep_interval number] -a|--audit_log file [-g|--group_by list] [-q|--query list]"
+        opt.on("-a", "--audit_log file",  "path to audit log file")                                { |o| options.audit_log       = o }
+        opt.on("-g", "--group_by list",   "list of fields for group by (default #{def_group_by})") { |o| options.group_by        = o }
+        opt.on("-l", "--limit limit",     "output limit (default #{def_limit})")                   { |o| options.limit           = o }
+        opt.on("-q", "--query list",      "query string in the form key1=value1,key2=value2...")   { |o| options.query           = o }
+        opt.on("-c", "--continuous",      "continuously monitor the audit log")                    { |o| options.continuous      = o }
+        opt.on("-d", "--debug",           "run in debug mode")                                     { |o| options.debug           = o }
+        opt.on("-h", "--suppress_header", "suppress header")                                       { |o| options.suppress_header = o }
+
+        opt.on("-t", "--time_interval n",  "in continuous mode, interval in seconds between two outputs (default #{def_interval})") { |o| options.interval = o }
+        opt.on("-s", "--sleep_interval n", "in continuous mode, sleep time in seconds when EOF is reached (default #{def_sleep})")  { |o| options.sleep    = o }
+    end
+
+    begin
+        optparse.parse!
+
+        # make sure mandatory options are specified
+        mandatory = [:audit_log]                                       # audit_log is required
+        missing = mandatory.select { |p| options[p].nil? }             # find out all missing ones
+        unless missing.empty?
+            raise OptionParser::MissingArgument.new(missing.join(', '))  # raise exception for missing
+    end
+
+    # sanity check all options
+
+    audit_log = options.audit_log
+    if not File.exist?(options.audit_log)
+        STDERR.puts "ERROR: audit log file '#{audit_log}' does not exist"
+        exit 1
+    end
+
+    valid_group_by_options = [:ugi, :cmd, :src, :ip]
+        invalid_groups = 0
+        options.group_by_array = []
+        options.group_by.split(/\s*,\s*/).each do |v|
+        g = v.to_sym
+        if valid_group_by_options.include?(g)
+            options.group_by_array << g.to_sym
+        else
+            STDERR.puts "'#{g}' is not a valid group by field"
+            invalid_groups += 1
+        end
+    end
+
+    if invalid_groups > 0
+        STDERR.puts "Valid group by fields are: #{valid_group_by_options.join(', ')}"
+        raise OptionParser::InvalidOption
+    end
+
+    options.query_array = options.query.split(/,/)
+
+    validate_option_int(options.limit, "Limit should be an integer > 0")
+    options.limit = options.limit.to_i
+    if (options.continuous)
+        validate_option_int(options.interval, "Time interval should be an integer > 0")
+        validate_option_int(options.sleep,    "Sleep interval should be an integer > 0")
+        options.interval = options.interval.to_i
+        options.sleep    = options.sleep.to_i
+    end
+
+    rescue OptionParser::InvalidOption, OptionParser::MissingArgument
+        STDERR.puts $!.to_s
+        STDERR.puts optparse
+        exit 2
+    end
+
+    options
+end
+
+def validate_option_int(value, message)
+    int_regex = /^[+]?[1-9]+[0-9]*$/
+    if not value =~ int_regex
+        STDERR.puts message
+        raise OptionParser::InvalidOption
+    end
+end
+
+def parse_caller_location
+    loc = (caller_locations)[5].to_s
+    /^(.+):(\d+):/.match(loc)
+    file, line = $1, $2
+    file = (Pathname.new(file)).basename
+    sprintf("%-30s", "#{file}:#{line}")
+end
+
+def main
+    #
+    # Initalize logger
+    #
+    logger = Logger.new(STDOUT)
+    logger.level = Logger::INFO
+    logger.datetime_format = '%Y-%m-%d %H:%M:%S'
+    logger.formatter = proc do |severity, datetime, progname, msg|
+        "#{datetime} #{sprintf('%-07s', severity)} #{parse_caller_location} #{msg}\n"
+    end
+
+    #
+    # This map is used while extracting fields from log lines as well as while printing the output
+    #
+    field_map = {
+        # format: field name, its array index when we split log line by tab, regex to be applied, replacement pattern, format string for pretty output
+        :ugi => [1, /^\S+=(\S+) .*/, '\1', '%-10s'],
+        :ip  => [2, /^\S+=(\S+)/,    '\1', '%-17s'],
+        :cmd => [3, /^\S+=(\S+)/,    '\1', '%-30s'],
+        :src => [4, /^\S+=(\S+)/,    '\1', '%-70s']
+    }
+
+    #
+    # process command line arguments
+    #
+    options = handle_args
+    logger.level = Logger::DEBUG if options.debug;
+
+    #
+    # read log, apply query filters if any, and  generate output
+    #
+    logger.debug "Started"
+    filemgr = HDFSLogFileManager.new(options, field_map, logger)
+    filemgr.process_file
+    filemgr.close
+end
+
+main
