@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 main_log=hdfs-audit.log
 c_log=hdfs-audit.log.continous
@@ -12,7 +12,7 @@ tail -5000 "$main_log" > "$c_log"
 #
 # clear any last byte position file that exists
 #
-rm -f "${c_log}"*.pos
+rm -f -- "${c_log}"*.pos
 
 #
 # initiate log appender in a sub shell - it keeps running as long as hdfstop is running; the initial sleep makes sure that we wait for
